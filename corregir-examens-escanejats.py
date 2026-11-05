@@ -11,13 +11,18 @@ respostes de "respostes.csv" i escriu "correccio.csv".
 
 respostes.csv: una línia per permutació de l'examen; el primer camp és el
 número de permutació (columna CODI del full) i després van les lletres
-correctes, p. ex.  2;C;D;C;D;A;...
+correctes, p. ex.  2;C;D;C;D;A;...  Una X en lloc de la lletra indica una
+pregunta eliminada: no es corregeix i no compta ni com a correcta, ni com a
+errònia, ni com a sense resposta.
 
 correccio.csv: una capçalera amb els noms dels camps i una línia per examen:
-    DNI;permutacio;correctes;erronies;sense_resposta;fitxer
+    DNI;permutacio;correctes;erronies;sense_resposta;avaluades;eliminades;fitxer
+on avaluades és el nombre de preguntes no eliminades
+(= correctes + erronies + sense_resposta).
 
 A més, per a cada imatge X.jpg es genera X-cor.jpg (al mateix directori) amb
-un cercle verd a les respostes correctes i un de vermell a les errònies.
+un cercle verd a les respostes correctes, un de vermell a les errònies i una
+ratlla blava que tatxa les preguntes eliminades.
 
 Funcionament:
   1. La imatge es redueix a ~300 ppp, es binaritza (llindar d'Otsu) i es
@@ -53,6 +58,7 @@ LLETRES = "ABCD"
 DIGITS_DNI = "1234567890"  # ordre de les files a la graella del DNI
 LLINDAR_MARCA = 0.06    # foscor per sobre del fons per considerar una casella marcada
 LLINDAR_CREU = 0.06     # foscor per sobre+sota de la casella que indica una creu
+ELIMINADA = "X"         # al fitxer de respostes, marca una pregunta eliminada
 
 
 # ----------------------------------------------------------------- imatge ----
@@ -336,7 +342,7 @@ def llegir_solucions(ruta):
 
     Cada línia: número de permutació (CODI) seguit de les lletres correctes,
     p. ex. "2;C;D;A;..." (separador ";" o ","; també val "2;CDA...").
-    Retorna {codi: [lletres]}.
+    Una X indica una pregunta eliminada. Retorna {codi: [lletres]}.
     """
     solucions = {}
     with open(ruta, newline="", encoding="utf-8-sig") as f:
@@ -350,7 +356,7 @@ def llegir_solucions(ruta):
             if not codi.isdigit():
                 raise ValueError(f"{ruta}, línia {n}: la línia ha de començar pel "
                                  f"número de permutació (s'ha llegit '{camps[0]}')")
-            if set(lletres) - set(LLETRES):
+            if set(lletres) - set(LLETRES + ELIMINADA):
                 raise ValueError(f"{ruta}, línia {n}: lletres no vàlides a les respostes")
             if codi in solucions:
                 raise ValueError(f"{ruta}, línia {n}: permutació {codi} repetida")
@@ -361,20 +367,26 @@ def llegir_solucions(ruta):
 
 
 def corregir(respostes, solucio):
-    correctes = erronies = blanques = 0
+    """Retorna (correctes, errònies, sense resposta, eliminades). Les preguntes
+    eliminades (X a la solució) no compten com a correctes, errònies ni sense
+    resposta."""
+    correctes = erronies = blanques = eliminades = 0
     for i, sol in enumerate(solucio):
         r = respostes[i] if i < len(respostes) else ""
+        if sol == ELIMINADA:
+            eliminades += 1
+            continue
         if r == "":
             blanques += 1
         elif r == sol:
             correctes += 1
         else:                       # incorrecta o més d'una marca
             erronies += 1
-    return correctes, erronies, blanques
+    return correctes, erronies, blanques, eliminades
 
 
 SUFIX_CORREGIDA = "-cor.jpg"
-VERD, VERMELL = (0, 170, 0), (0, 0, 230)   # colors en format BGR d'OpenCV
+VERD, VERMELL, BLAU = (0, 170, 0), (0, 0, 230), (220, 90, 0)   # colors BGR d'OpenCV
 
 
 def nom_corregida(ruta):
@@ -383,12 +395,19 @@ def nom_corregida(ruta):
 
 def desar_corregida(ruta, geometria, respostes, solucio):
     """Desa <nom>-cor.jpg amb un cercle verd a cada resposta correcta i un de
-    vermell a cada errònia (si hi ha diverses marques, a totes)."""
+    vermell a cada errònia (si hi ha diverses marques, a totes). Les preguntes
+    eliminades es tatxen amb una ratlla blava, del número fins a la casella D."""
     foscor, preg_pos, mida = geometria
     img = cv2.cvtColor(((1 - foscor) * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
     radi = int(round(0.7 * mida[0]))
     gruix = max(2, int(round(mida[1] / 10)))
     for n, (resp, pos) in enumerate(zip(respostes, preg_pos)):
+        if n < len(solucio) and solucio[n] == ELIMINADA:
+            (xa, y), (xd, _) = pos[0], pos[-1]
+            inici = (int(round(xa - 1.6 * mida[0])), int(round(y)))   # inclou el número
+            final = (int(round(xd + 0.8 * mida[0])), int(round(y)))
+            cv2.line(img, inici, final, BLAU, 2 * gruix, lineType=cv2.LINE_AA)
+            continue
         if not resp or n >= len(solucio):
             continue
         color = VERD if resp == solucio[n] else VERMELL
@@ -440,7 +459,8 @@ def main():
 
     with open(args.sortida, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f, delimiter=";")
-        w.writerow(["DNI", "permutacio", "correctes", "erronies", "sense_resposta", "fitxer"])
+        w.writerow(["DNI", "permutacio", "correctes", "erronies", "sense_resposta",
+                    "avaluades", "eliminades", "fitxer"])
         for ruta in imatges:
             try:
                 dni, codi, resp, avisos, geometria = llegir_full(ruta, args.llindar)
@@ -453,24 +473,28 @@ def main():
                 continue
             solucio = solucions[codi]
             if len(resp) != len(solucio):
-                print(f"AVÍS {ruta}: {len(resp)} preguntes al full, "
-                      f"{len(solucio)} a {args.respostes}", file=sys.stderr)
+                print(f"ERROR {ruta}: DNI {dni}, {len(resp)} preguntes al full però "
+                      f"{len(solucio)} a la permutació {codi} de {args.respostes}; "
+                      "examen no corregit", file=sys.stderr)
+                continue
             for a in avisos:
                 print(f"AVÍS {ruta}: {a}", file=sys.stderr)
             if "?" in dni:
                 print(f"AVÍS {ruta}: DNI no llegit correctament ({dni})", file=sys.stderr)
             for i, r in enumerate(resp, 1):
-                if len(r) > 1:
+                if len(r) > 1 and not (i <= len(solucio) and solucio[i - 1] == ELIMINADA):
                     print(f"AVÍS {ruta}: pregunta {i} amb diverses marques ({r}), "
                           "compta com a errònia", file=sys.stderr)
-            c, e, b = corregir(resp, solucio)
-            w.writerow([dni, codi, c, e, b, os.path.basename(ruta)])
+            c, e, b, elim = corregir(resp, solucio)
+            avaluades = len(solucio) - elim
+            w.writerow([dni, codi, c, e, b, avaluades, elim, os.path.basename(ruta)])
             try:
                 desar_corregida(ruta, geometria, resp, solucio)
             except OSError as err:
                 print(f"AVÍS {ruta}: {err}", file=sys.stderr)
             print(f"{os.path.basename(ruta)}: DNI {dni}  CODI {codi}  correctes {c}  "
-                  f"errònies {e}  sense resposta {b}")
+                  f"errònies {e}  sense resposta {b}  avaluades {avaluades}  "
+                  f"eliminades {elim}")
             if args.detall:
                 print("   " + " ".join(f"{i}:{r or '-'}" for i, r in enumerate(resp, 1)))
 

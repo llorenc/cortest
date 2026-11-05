@@ -74,6 +74,26 @@ separades per `;` o `,`:
 
 També s'accepten les lletres juntes: `2;DDDCACCDBC...`.
 
+**Preguntes eliminades.** Si una pregunta s'ha d'anul·lar (per exemple, perquè
+l'enunciat tenia un error), **substitueix** la seva lletra correcta per una
+`X`. La línia ha de continuar tenint una lletra o una `X` per a cada pregunta.
+A l'exemple següent, la pregunta 1 de la permutació 2 està eliminada:
+
+```
+abans:   2;D;D;D;C;A;C;C;D;B;C;...
+després: 2;X;D;D;C;A;C;C;D;B;C;...
+```
+
+Vigila de no esborrar cap lletra en posar la `X`. Si a una línia li falta una
+resposta, totes les preguntes següents es compararien amb la resposta de la
+pregunta següent. Per evitar-ho, el programa no corregeix cap examen d'aquella
+permutació i mostra un error (vegeu *Avisos i errors*).
+
+Una pregunta eliminada no es corregeix i no compta ni com a correcta, ni com a
+errònia, ni com a sense resposta. Recorda que, si la pregunta surt en una
+posició diferent a cada permutació, cal posar la `X` a la posició
+corresponent de cada línia.
+
 ## Corregir els exàmens
 
 ```bash
@@ -101,14 +121,28 @@ python3 corregir-examens-escanejats.py full1.jpg full2.jpg -r claus.csv -o notes
 **`correccio.csv`** té una capçalera i una línia per examen, separades per `;`:
 
 ```
-DNI;permutacio;correctes;erronies;sense_resposta;fitxer
-12856003;5;15;3;12;A6E01-20261104101917864_0001-0.jpg
-48047507;6;13;6;11;A6E01-20261104101917864_0002-1.jpg
+DNI;permutacio;correctes;erronies;sense_resposta;avaluades;eliminades;fitxer
+12856003;5;14;3;12;29;1;A6E01-20261104101917864_0001-0.jpg
+48047507;6;12;6;11;29;1;A6E01-20261104101917864_0002-1.jpg
 ```
+
+| Columna | Significat |
+|---|---|
+| `DNI` | DNI llegit de la graella (`?` als dígits que no s'han pogut llegir). |
+| `permutacio` | Número de permutació (columna CODI del full). |
+| `correctes` | Preguntes contestades correctament. |
+| `erronies` | Preguntes contestades malament o amb més d'una marca. |
+| `sense_resposta` | Preguntes avaluades sense cap casella marcada. |
+| `avaluades` | Preguntes no eliminades (= correctes + erronies + sense_resposta). |
+| `eliminades` | Preguntes marcades amb `X` al fitxer de respostes. |
+| `fitxer` | Nom de la imatge corregida. |
+
+Per exemple, la nota sobre 10 sense penalització és `10 * correctes / avaluades`.
 
 **Imatge corregida.** Per a cada examen `X.jpg` es crea `X-cor.jpg` al mateix
 directori: un cercle **verd** a cada resposta correcta i un cercle **vermell**
-a cada resposta errònia. Les preguntes en blanc no es marquen. Si es torna a
+a cada resposta errònia. Les preguntes eliminades es tatxen amb una ratlla
+**blava**. Les preguntes en blanc no es marquen. Si es torna a
 executar el programa, aquestes imatges no es corregeixen com si fossin exàmens.
 
 **Criteris de correcció:**
@@ -116,6 +150,7 @@ executar el programa, aquestes imatges no es corregeixen com si fossin exàmens.
 - **Correcta:** s'ha marcat només la lletra correcta.
 - **Errònia:** s'ha marcat una lletra incorrecta, o més d'una lletra.
 - **Sense resposta:** no s'ha marcat cap casella.
+- **Eliminada:** la pregunta té una `X` al fitxer de respostes. No compta enlloc, de manera que correctes + errònies + sense resposta és el nombre de preguntes no eliminades.
 - **Casella anul·lada amb una creu (X):** si l'estudiant ha omplert una casella i després l'ha ratllat amb una creu, aquesta no compta i es pren l'altra marca. Funciona igual a la graella del DNI.
 
 El fitxer només conté els recomptes. Si cal aplicar penalització per les
@@ -123,7 +158,11 @@ errònies, es pot calcular després a partir de les columnes.
 
 ### Avisos i errors
 
-El programa mostra per pantalla els casos que convé revisar a mà:
+El programa mostra per pantalla els casos que convé revisar a mà.
+
+Els missatges que comencen per `AVÍS` indiquen casos que convé revisar, però
+l'examen es corregeix. Els que comencen per `ERROR` indiquen que l'examen
+**no s'ha corregit** i no apareix a `correccio.csv`.
 
 | Missatge | Què vol dir |
 |---|---|
@@ -131,7 +170,7 @@ El programa mostra per pantalla els casos que convé revisar a mà:
 | `pregunta 4 amb diverses marques (CD), compta com a errònia` | Doble marca a la pregunta. |
 | `pregunta 8: B anul·lada, es pren A` | S'ha detectat una casella anul·lada amb una creu. |
 | `permutació (CODI) '…' no llegida o no és a respostes.csv` | No es pot saber quina permutació és. L'examen **no es corregeix**. |
-| `31 preguntes al full, 30 a respostes.csv` | El nombre de preguntes del full no coincideix amb el de la clau. |
+| `ERROR …: 30 preguntes al full però 29 a la permutació 1 de respostes.csv; examen no corregit` | El nombre de preguntes del full no coincideix amb el nombre de respostes d'aquella permutació a `respostes.csv`. Normalment és que a la línia hi falta o hi sobra una lletra. L'examen **no es corregeix** fins que s'arregli el fitxer. |
 | `no es troben els 4 cercles de les cantonades` | El full s'ha escanejat retallat o tapat. Es corregeix sense redreçar-lo. |
 
 ## Com funciona el corrector
