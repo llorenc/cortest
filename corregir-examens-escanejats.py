@@ -33,6 +33,12 @@ Funcionament:
      dedueixen les files i les columnes de les graelles, de manera que també se
      sap on són les caselles omplertes (que ja no són buides). Les caselles del
      DNI (més allargades) se separen de les de les preguntes per la forma.
+     Si les vores de les caselles són tan clares que no es troben (p. ex. fulls
+     d'ExamIO), les caselles es localitzen a partir de les lletres i els
+     dígits impresos a dins (A, B, C, D i 1..0): es busquen els glifs envoltats
+     per una vora fluixa i alineats en columnes, la graella del DNI són les
+     10 primeres files equiespaiades, i la mida de les caselles es mesura
+     superposant (mitjana) les finestres al voltant de tots els glifs.
   3. Graella del DNI: 10 files (dígits 1..9,0), 8 columnes de DNI i una 9a
      columna amb el CODI (permutació). Preguntes: 4 caselles A,B,C,D per fila.
   4. Es mesura la foscor (nivell de gris) de l'interior de cada casella i se li
@@ -174,7 +180,158 @@ def caselles_buides(comps, etiquetes, W, H):
     return res
 
 
-def construir_graelles(binaria):
+# --------------------------------- caselles a partir dels glifs impresos ----
+#
+# Alguns fulls (p. ex. els d'ExamIO) tenen les vores de les caselles tan
+# clares que no es distingeixen del paper ni de la transparència de l'altra
+# cara. En canvi, les lletres A, B, C, D i els dígits 1..0 impresos a dins de
+# les caselles són foscos. Es localitzen aquests glifs, es descarten els que no
+# són dins d'una casella (números de pregunta, etiquetes de les files del DNI,
+# text) i, de la mitjana de les caselles que els envolten, se'n mesura la mida.
+
+LLINDAR_VORA = 0.012    # foscor mínima de la vora (fluixa) d'una casella al voltant d'un glif
+
+
+def glifs(binaria):
+    """Components de la mida d'un caràcter petit (les lletres de les caselles)."""
+    H, W = binaria.shape
+    # una dilatació petita uneix els trossos de les lletres trencades a l'escaneig
+    comps, _ = components(cv2.dilate(binaria, np.ones((3, 3), np.uint8)))
+    return [c for c in comps
+            if 0.0025 * H < c["h"] < 0.0075 * H and 0.001 * W < c["w"] < 0.012 * W
+            and c["w"] < 2 * c["h"]]
+
+
+def vora_casella(foscor, g, gh):
+    """Contrast de les línies horitzontals de la casella per sobre i per sota del
+    glif g. Es mira als costats del glif (on la vora continua però no hi ha els
+    glifs de les files veïnes). Retorna el contrast més feble dels dos."""
+    H, W = foscor.shape
+    y0, y1 = int(g["cy"] - 1.6 * gh), int(g["cy"] + 1.6 * gh)
+    a1 = int(g["w"] / 2 + 0.2 * gh)
+    a2 = a1 + int(0.6 * gh)
+    xc = int(g["cx"])
+    if y0 < 0 or y1 > H or xc - a2 < 0 or xc + a2 > W:
+        return 0.0
+    perfil = np.concatenate([foscor[y0:y1, xc - a2:xc - a1],
+                             foscor[y0:y1, xc + a1:xc + a2]], axis=1).mean(axis=1)
+    fons = np.median(perfil)
+    mig, e = len(perfil) // 2, int(0.45 * gh)
+    return float(min(perfil[:mig - e].max(), perfil[mig + e:].max()) - fons)
+
+
+def pic(perfil, centre, sentit, inici, fi):
+    """Posició del màxim de perfil entre centre+sentit*inici i centre+sentit*fi."""
+    idx = [centre + sentit * d for d in range(int(inici), int(fi) + 1)
+           if 0 <= centre + sentit * d < len(perfil)]
+    if not idx:
+        raise ValueError("no es pot mesurar la mida de les caselles")
+    return max(idx, key=lambda i: perfil[i])
+
+
+def mida_per_glifs(foscor, gs, gh, pas_x, pas_y):
+    """Mida de les caselles i desplaçament del seu centre respecte del glif.
+
+    Se superposen (mitjana) les finestres centrades a cada glif: les vores
+    fluixes de les caselles s'hi reforcen i el soroll i les marques es
+    dilueixen. Retorna (w, h, dx, dy)."""
+    H, W = foscor.shape
+    rx, ry = int(0.5 * pas_x), int(0.5 * pas_y)       # fins a mig camí de la veïna
+    finestres = [foscor[int(g["cy"]) - ry:int(g["cy"]) + ry + 1,
+                        int(g["cx"]) - rx:int(g["cx"]) + rx + 1] for g in gs
+                 if ry <= g["cy"] < H - ry - 1 and rx <= g["cx"] < W - rx - 1]
+    if not finestres:
+        raise ValueError("no es pot mesurar la mida de les caselles")
+    m = np.mean(finestres, axis=0)
+    g_mig = 0.45 * gh                                  # mig glif (amb marge)
+    # línies de dalt i de baix: als costats del glif
+    costats = np.r_[0:max(1, rx - int(g_mig)), rx + int(g_mig) + 1:2 * rx + 1]
+    perfil_y = m[:, costats].mean(axis=1)
+    dalt = pic(perfil_y, ry, -1, g_mig, ry)
+    baix = pic(perfil_y, ry, +1, g_mig, ry)
+    # vores esquerra i dreta: entre la línia de dalt i la de baix
+    perfil_x = m[dalt + 2:baix - 1].mean(axis=0) if baix - dalt > 4 else m.mean(axis=0)
+    esq = pic(perfil_x, rx, -1, g_mig, rx)
+    dre = pic(perfil_x, rx, +1, g_mig, rx)
+    return dre - esq, baix - dalt, (esq + dre) / 2 - rx, (dalt + baix) / 2 - ry
+
+
+def caselles_per_glifs(binaria, foscor):
+    """Localitza les caselles del DNI i de les preguntes a partir dels glifs
+    impresos a dins. Retorna (caselles_dni, caselles_preg) com a dicts amb
+    cx, cy, w, h, per a graelles()."""
+    gs = glifs(binaria)
+    if len(gs) < 20:
+        raise ValueError("no es troben les lletres de les caselles")
+    gh = float(np.median([g["h"] for g in gs]))
+    # només els glifs envoltats per una casella i de mida homogènia (els
+    # números de pregunta i les etiquetes són més grans)
+    amb_vora = [g for g in gs if vora_casella(foscor, g, gh) >= LLINDAR_VORA]
+    if len(amb_vora) < 20:
+        raise ValueError("no es troben les lletres de les caselles")
+    gh = float(np.median([g["h"] for g in amb_vora]))
+    amb_vora = [g for g in amb_vora if abs(g["h"] - gh) <= 0.2 * gh]
+
+    # columnes de caselles: on hi ha diversos glifs amb vora alineats
+    # verticalment. Després s'hi afegeixen els glifs de la mateixa mida on la
+    # vora és massa fluixa per detectar-la glif a glif.
+    cols, n = agrupar([g["cx"] for g in amb_vora], 0.6 * gh)
+    cols = [x for x, k in zip(cols, n) if k >= 3]
+    gs = [g for g in gs if abs(g["h"] - gh) <= 0.2 * gh and cols
+          and min(abs(g["cx"] - x) for x in cols) <= 0.6 * gh]
+    if not gs:
+        raise ValueError("no es troben les lletres de les caselles")
+
+    # files; la graella del DNI són les 10 primeres files equiespaiades
+    files, n = agrupar([g["cy"] for g in gs], 0.5 * gh)
+    files = [y for y, k in zip(files, n) if k >= 3]
+    inici = None
+    for i in range(len(files) - 9):
+        passos = np.diff(files[i:i + 10])
+        if np.all(np.abs(passos - np.median(passos)) < 0.25 * np.median(passos)):
+            inici = i
+            break
+    if inici is None:
+        raise ValueError("no es troba la graella del DNI (10 files de dígits)")
+    files_dni = files[inici:inici + 10]
+    pas_dni_y = float(np.median(np.diff(files_dni)))
+    dni = [g for g in gs if files_dni[0] - pas_dni_y / 2 < g["cy"] < files_dni[-1] + pas_dni_y / 2]
+    preg = [g for g in gs if g["cy"] > files_dni[-1] + pas_dni_y]
+    files_preg = [y for y in files if y > files_dni[-1] + pas_dni_y]
+    if len(files_preg) < 1 or len(preg) < 4:
+        raise ValueError("no es troben les lletres de les preguntes")
+
+    def pas_columnes(gs):
+        xs, _ = agrupar([g["cx"] for g in gs], 0.6 * gh)
+        return float(np.median(np.diff(xs))) if len(xs) > 1 else 4 * gh
+
+    resultat = []
+    for grup, pas_y in ((dni, pas_dni_y),
+                        (preg, float(np.median(np.diff(files_preg))) if len(files_preg) > 1
+                         else 2 * pas_dni_y)):
+        w, h, dx, dy = mida_per_glifs(foscor, grup, gh, pas_columnes(grup), pas_y)
+        resultat.append([dict(cx=g["cx"] + dx, cy=g["cy"] + dy, w=w, h=h) for g in grup])
+    return resultat
+
+
+def construir_graelles(binaria, foscor):
+    """Retorna (dni, codi, mida_dni, preguntes, mida_preg, avisos).
+
+    Primer es busquen les caselles pel seu contorn. Si no es troben (p. ex.
+    fulls amb les vores de les caselles molt clares), es localitzen a partir
+    de les lletres i els dígits impresos a dins (A, B, C, D i 1..0)."""
+    try:
+        return graelles_per_contorns(binaria) + ([],)
+    except ValueError as error:
+        try:
+            res = graelles(*caselles_per_glifs(binaria, foscor))
+        except ValueError:
+            raise error from None
+        return res + (["caselles localitzades a partir de les lletres i "
+                             "els dígits impresos (vores massa clares)"],)
+
+
+def graelles_per_contorns(binaria):
     H, W = binaria.shape
     comps, etiquetes = components(binaria)
     caselles = caselles_buides(comps, etiquetes, W, H)
@@ -204,6 +361,18 @@ def construir_graelles(binaria):
         return [c for c in cs if abs(c["w"] - w_med) < 0.2 * w_med
                 and abs(c["h"] - h_med) < 0.2 * h_med]
 
+    return graelles(mida_homogenia(caselles_dni), mida_homogenia(caselles_preg))
+
+
+def graelles(caselles_dni, caselles_preg):
+    """A partir de les caselles (dicts amb cx, cy, w, h) de la graella del DNI i
+    de les preguntes, dedueix les files i les columnes de cada graella.
+    Retorna (dni, codi, mida_dni, preguntes, mida_preg)."""
+    if not caselles_dni:
+        raise ValueError("no es troben les caselles del DNI")
+    if not caselles_preg:
+        raise ValueError("no es troben les caselles de les preguntes")
+
     def columnes(cs):
         w_med = np.median([c["w"] for c in cs])
         cols, n = agrupar([c["cx"] for c in cs], w_med / 2)
@@ -212,11 +381,6 @@ def construir_graelles(binaria):
         # descarta objectes que no són a cap columna
         cs = [c for c in cs if min(abs(c["cx"] - x) for x in cols) < w_med / 2]
         return cols, mida, cs
-
-    caselles_dni = mida_homogenia(caselles_dni)
-    caselles_preg = mida_homogenia(caselles_preg)
-    if not caselles_preg:
-        raise ValueError("no es troben les caselles de les preguntes")
 
     cols_dni, mida_dni, caselles_dni = columnes(caselles_dni)
     files_dni, n = agrupar([c["cy"] for c in caselles_dni], mida_dni[1] / 2)
@@ -309,8 +473,8 @@ def llegir_full(ruta, llindar=LLINDAR_MARCA):
     cadena amb les lletres marcades ("" = en blanc, "AB" = diverses marques).
     geometria = (foscor, posicions de les caselles, mida) per dibuixar."""
     binaria, foscor = carregar(ruta)
-    dni_pos, codi_pos, mida_dni, preg_pos, mida_preg = construir_graelles(binaria)
-    avisos = []
+    dni_pos, codi_pos, mida_dni, preg_pos, mida_preg, avisos = \
+        construir_graelles(binaria, foscor)
 
     # DNI i CODI: una fila de la matriu per columna del full, 10 dígits
     columnes = dni_pos + ([codi_pos] if codi_pos else [])

@@ -171,12 +171,15 @@ l'examen es corregeix. Els que comencen per `ERROR` indiquen que l'examen
 | `pregunta 8: B anul·lada, es pren A` | S'ha detectat una casella anul·lada amb una creu. |
 | `permutació (CODI) '…' no llegida o no és a respostes.csv` | No es pot saber quina permutació és. L'examen **no es corregeix**. |
 | `ERROR …: 30 preguntes al full però 29 a la permutació 1 de respostes.csv; examen no corregit` | El nombre de preguntes del full no coincideix amb el nombre de respostes d'aquella permutació a `respostes.csv`. Normalment és que a la línia hi falta o hi sobra una lletra. L'examen **no es corregeix** fins que s'arregli el fitxer. |
+| `caselles localitzades a partir de les lletres i els dígits impresos (vores massa clares)` | Les vores de les caselles no es veuen prou i s'han localitzat a partir de les lletres i els dígits de dins. Normalment la correcció és bona, però convé revisar la imatge `-cor.jpg`. |
 | `no es troben els 4 cercles de les cantonades` | El full s'ha escanejat retallat o tapat. Es corregeix sense redreçar-lo. |
 
 ## Com funciona el corrector
 
 1. **Càrrega.** La imatge es redueix a uns 300 ppp, es binaritza (llindar d'Otsu) i es corregeix la perspectiva amb els 4 cercles de les cantonades. Això corregeix el gir, la inclinació i la deformació en trapezi, com la d'una foto feta amb el mòbil.
 2. **Caselles.** Es localitzen les caselles buides: components amb forma de rectangle i interior blanc. A partir d'aquestes es dedueixen les files i les columnes de les graelles, de manera que també se sap on són les caselles que l'estudiant ha omplert. Les caselles del DNI, més allargades, se separen de les de les preguntes per la forma.
+
+   Si les vores de les caselles són massa clares per trobar-les (passa amb alguns fulls d'ExamIO, on la vora és gairebé del color del paper), les caselles es localitzen a partir de les lletres i els dígits impresos a dins (A, B, C, D i 1…0). Es descarten els números de pregunta, les etiquetes de les files i el text, que no tenen una casella al voltant o són de mida diferent. La graella del DNI són les 10 primeres files de dígits, i la mida de les caselles es mesura fent la mitjana de les finestres al voltant de totes les lletres, on la vora fluixa es reforça.
 3. **Marques.** Es mesura la foscor (nivell de gris) de l'interior de cada casella i se li resta el fons de les caselles buides amb la mateixa lletra o dígit. Una casella està marcada si supera el llindar de 0,06. Així es detecten també les marques fluixes fetes amb llapis.
 4. **Creus.** Si una pregunta té diverses marques i una sobresurt clarament per sobre i per sota de la casella (la creu), es considera anul·lada.
 
