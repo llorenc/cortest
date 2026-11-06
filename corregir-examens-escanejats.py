@@ -21,8 +21,8 @@ on avaluades és el nombre de preguntes no eliminades
 (= correctes + erronies + sense_resposta).
 
 A més, per a cada imatge X.jpg es genera X-cor.jpg (al mateix directori) amb
-un cercle verd a les respostes correctes, un de vermell a les errònies i una
-ratlla blava que tatxa les preguntes eliminades.
+un cercle verd a les respostes correctes, una creu vermella a les errònies i
+una ratlla blava que tatxa les preguntes eliminades.
 
 Funcionament:
   1. La imatge es redueix a ~300 ppp, es binaritza (llindar d'Otsu) i es
@@ -280,7 +280,10 @@ def sobre_fons(m):
     m = np.asarray(m, dtype=float)
     lliure = np.ones_like(m, dtype=bool)
     lliure[np.arange(len(m)), m.argmax(axis=1)] = False
-    fons = np.array([np.median(m[lliure[:, j], j]) for j in range(m.shape[1])])
+    # si una columna no té cap valor lliure (p. ex. graella en blanc), es fa
+    # servir tota la columna
+    fons = np.array([np.median(m[lliure[:, j], j]) if lliure[:, j].any()
+                     else np.median(m[:, j]) for j in range(m.shape[1])])
     return m - fons
 
 
@@ -393,9 +396,18 @@ def nom_corregida(ruta):
     return os.path.splitext(ruta)[0] + SUFIX_CORREGIDA
 
 
+def creu(img, x, y, radi, color, gruix):
+    """Dibuixa una creu (X) centrada a (x, y), de la mateixa mida que el cercle."""
+    d = radi * 0.75
+    for sx in (-1, 1):
+        cv2.line(img, (int(round(x - sx * d)), int(round(y - d))),
+                 (int(round(x + sx * d)), int(round(y + d))), color, gruix,
+                 lineType=cv2.LINE_AA)
+
+
 def desar_corregida(ruta, geometria, respostes, solucio):
-    """Desa <nom>-cor.jpg amb un cercle verd a cada resposta correcta i un de
-    vermell a cada errònia (si hi ha diverses marques, a totes). Les preguntes
+    """Desa <nom>-cor.jpg amb un cercle verd a cada resposta correcta i una creu
+    vermella a cada errònia (si hi ha diverses marques, a totes). Les preguntes
     eliminades es tatxen amb una ratlla blava, del número fins a la casella D."""
     foscor, preg_pos, mida = geometria
     img = cv2.cvtColor(((1 - foscor) * 255).astype(np.uint8), cv2.COLOR_GRAY2BGR)
@@ -410,11 +422,14 @@ def desar_corregida(ruta, geometria, respostes, solucio):
             continue
         if not resp or n >= len(solucio):
             continue
-        color = VERD if resp == solucio[n] else VERMELL
+        correcta = resp == solucio[n]
         for lletra in resp:
             x, y = pos[LLETRES.index(lletra)]
-            cv2.circle(img, (int(round(x)), int(round(y))), radi, color, gruix,
-                       lineType=cv2.LINE_AA)
+            if correcta:
+                cv2.circle(img, (int(round(x)), int(round(y))), radi, VERD, gruix,
+                           lineType=cv2.LINE_AA)
+            else:
+                creu(img, x, y, radi, VERMELL, gruix)
     desti = nom_corregida(ruta)
     if not cv2.imwrite(desti, img, [cv2.IMWRITE_JPEG_QUALITY, 90]):
         raise OSError(f"no es pot escriure {desti}")
