@@ -53,9 +53,9 @@ python3 plantilla-examens-escanejats.py 30 6
 Es genera `plantilla.pdf`, en A4, amb una pàgina per permutació. Cada pàgina té:
 
 - **4 cercles negres a les cantonades.** El corrector els fa servir per redreçar el full.
-- **Requadre de dades** (Nom, Cognoms, Grup, DNI, CODI), amb el número de permutació ja escrit al camp CODI.
-- **Graella del DNI:** 8 columnes amb els dígits 1, 2, …, 9, 0. L'estudiant marca un dígit per columna.
-- **Columna CODI** amb la casella de la permutació ja marcada.
+- **Requadre de dades** a l'esquerra de la capçalera (Nom, Cognoms, Grup, DNI), perquè l'estudiant hi escrigui a mà.
+- **Graella del DNI**, al marge dret: 8 columnes amb els dígits 1, 2, …, 9, 0. L'estudiant marca un dígit per columna.
+- **Columna CODI**, a la dreta de la graella del DNI, amb la casella de la permutació ja marcada.
 - **Les preguntes**, amb 4 caselles A, B, C, D cadascuna. Hi caben fins a 30 preguntes per columna; si n'hi ha més, es reparteixen en 2 o 3 columnes i es numeren de dalt a baix i d'esquerra a dreta.
 
 Límits: com a màxim **90 preguntes** i **9 permutacions** (la columna CODI té els dígits 1 a 9).
@@ -140,7 +140,7 @@ DNI;permutacio;correctes;erronies;sense_resposta;avaluades;eliminades;fitxer
 Per exemple, la nota sobre 10 sense penalització és `10 * correctes / avaluades`.
 
 **Imatge corregida.** Per a cada examen `X.jpg` es crea `X-cor.jpg` al mateix
-directori: un cercle **verd** a cada resposta correcta i un cercle **vermell**
+directori: un cercle **verd** a cada resposta correcta i una creu **vermella**
 a cada resposta errònia. Les preguntes eliminades es tatxen amb una ratlla
 **blava**. Les preguntes en blanc no es marquen. Si es torna a
 executar el programa, aquestes imatges no es corregeixen com si fossin exàmens.
