@@ -7,10 +7,9 @@
 Crea una pàgina per permutació. A cada pàgina hi ha:
   - els 4 cercles negres de les cantonades (corregir-examens-escanejats.py els
     fa servir per redreçar el full),
-  - el requadre de dades de l'estudiant (Nom, Cognoms, Grup, DNI, CODI) amb el
-    número de permutació ja escrit al camp CODI,
-  - la graella del DNI (8 columnes, dígits 1..9,0) i la columna CODI amb la
-    casella de la permutació ja marcada,
+  - a l'esquerra, el requadre de dades de l'estudiant (Nom, Cognoms, Grup, DNI),
+  - al marge dret, la graella del DNI (8 columnes, dígits 1..9,0) i la columna
+    CODI amb la casella de la permutació ja marcada,
   - les preguntes amb 4 caselles A, B, C, D. Fins a 30 preguntes per columna;
     amb més preguntes es reparteixen en 2 o 3 columnes (màxim 90). Es numeren
     de dalt a baix i d'esquerra a dreta, tal com les llegeix
@@ -43,16 +42,20 @@ LINIA = 0.6                           # gruix de línia de les caselles (pt)
 CERCLE_RADI = 2.5
 CERCLE_MARGE_X, CERCLE_MARGE_Y = 10, 12
 
-DADES_X0, DADES_X1, DADES_Y0, DADES_Y1 = 12, 77.5, 29.5, 63
-
-DNI_X0 = 86.1                         # vora esquerra de la 1a columna del DNI
+# Graella del DNI i CODI, alineada al marge dret (la vora dreta del marc a 195 mm)
+DESPL_GRAELLA = 28.7                  # desplaçament respecte del full original
+DNI_X0 = 86.1 + DESPL_GRAELLA         # vora esquerra de la 1a columna del DNI
 DNI_PAS_X = 8.55
-CODI_X0 = 157.5
+CODI_X0 = 157.5 + DESPL_GRAELLA
 DNI_Y0 = 29.3                         # vora superior de la fila del dígit 1
 DNI_PAS_Y = 3.47
 DNI_CASELLA = (5.8, 2.2)
-MARC_X0, MARC_X1, MARC_Y0, MARC_Y1 = 83.9, 166.3, 27.5, 64.4
-SEPARADOR_X = 154.6
+MARC_X0, MARC_X1, MARC_Y0, MARC_Y1 = (83.9 + DESPL_GRAELLA, 166.3 + DESPL_GRAELLA,
+                                      27.5, 64.4)
+SEPARADOR_X = 154.6 + DESPL_GRAELLA
+
+# Requadre de dades de l'estudiant: ocupa tot l'espai a l'esquerra de la graella
+DADES_X0, DADES_X1, DADES_Y0, DADES_Y1 = 12, MARC_X0 - 7, MARC_Y0, MARC_Y1
 
 PREG_Y0 = 73.5                        # vora superior de la 1a fila de preguntes
 PREG_PAS_Y = 6.4
@@ -87,19 +90,18 @@ def cantonades(c):
     c.rect(102.5 * mm, y(CERCLE_MARGE_Y + 2.5), 5 * mm, 5 * mm, stroke=0, fill=1)
 
 
-def dades_estudiant(c, permutacio):
+def dades_estudiant(c):
     c.setLineWidth(0.8)
     c.roundRect(DADES_X0 * mm, y(DADES_Y1), (DADES_X1 - DADES_X0) * mm,
                 (DADES_Y1 - DADES_Y0) * mm, 2 * mm, stroke=1, fill=0)
     c.setLineWidth(0.5)
-    camps = ["Nom", "Cognoms", "Grup", "DNI", "CODI"]
+    camps = ["Nom", "Cognoms", "Grup", "DNI"]
+    pas = (DADES_Y1 - DADES_Y0) / len(camps)
     for i, camp in enumerate(camps):
-        base = 35.5 + i * 6.4
-        c.setFont("Helvetica", 8)
-        c.drawString(14.5 * mm, y(base), camp)
-        c.line(33 * mm, y(base + 0.8), 74 * mm, y(base + 0.8))
-    c.setFont("Helvetica", 13)
-    c.drawString(38 * mm, y(35.5 + 4 * 6.4), str(permutacio))
+        base = DADES_Y0 + (i + 0.75) * pas      # línia base del text i de la ratlla
+        c.setFont("Helvetica", 9)
+        c.drawString((DADES_X0 + 3) * mm, y(base), camp)
+        c.line((DADES_X0 + 22) * mm, y(base + 0.8), (DADES_X1 - 3) * mm, y(base + 0.8))
 
 
 def graella_dni(c, permutacio):
@@ -144,7 +146,7 @@ def preguntes(c, num_preguntes):
 
 def pagina(c, num_preguntes, permutacio):
     cantonades(c)
-    dades_estudiant(c, permutacio)
+    dades_estudiant(c)
     graella_dni(c, permutacio)
     preguntes(c, num_preguntes)
     c.showPage()
