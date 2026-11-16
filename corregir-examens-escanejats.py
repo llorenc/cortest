@@ -6,7 +6,7 @@ Cal OpenCV (paquet python3-opencv o pip install opencv-python-headless).
 Ús:
     python3 corregir-examens-escanejats.py [imatges_o_directoris ...] [-r respostes.csv] [-o correccio.csv]
 
-Per defecte corregeix tots els .jpg/.jpeg del directori "test" amb les
+Per defecte corregeix totes les imatges (.jpg/.jpeg/.tif/.tiff) del directori "test" amb les
 respostes de "respostes.csv" i escriu "correccio.csv".
 
 respostes.csv: una línia per permutació de l'examen; el primer camp és el
@@ -20,12 +20,17 @@ correccio.csv: una capçalera amb els noms dels camps i una línia per examen:
 on avaluades és el nombre de preguntes no eliminades
 (= correctes + erronies + sense_resposta).
 
-A més, per a cada imatge X.jpg es genera X-cor.jpg (al mateix directori) amb
+A més, per a cada imatge X.jpg (o X.tiff) es genera X-cor.jpg (al mateix directori) amb
 un cercle verd a les respostes correctes, una creu vermella a les errònies i
 una ratlla blava que tatxa les preguntes eliminades.
 
 Funcionament:
-  1. La imatge es redueix a ~300 ppp, es binaritza (llindar d'Otsu) i es
+  1. Les imatges en blanc i negre (1 bit, habituals en TIFF) es converteixen
+     amb ImageMagick ("convert -adaptive-blur 10 -monochrome"), que engruixeix
+     el traç: la trama de punts del llapis es reforça i les vores puntejades
+     de les caselles es tanquen. Sense ImageMagick es fa una conversió
+     aproximada amb OpenCV.
+     La imatge es redueix a ~300 ppp, es binaritza (llindar d'Otsu) i es
      corregeix la perspectiva amb els 4 cercles negres de les cantonades (gir,
      inclinació i deformació en trapezi, p. ex. en fotos de mòbil).
   2. Es localitzen les caselles buides: components buits amb forma de
@@ -53,9 +58,11 @@ Funcionament:
 
 import argparse
 import csv
-import glob
 import os
+import shutil
+import subprocess
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -64,6 +71,17 @@ LLETRES = "ABCD"
 DIGITS_DNI = "1234567890"  # ordre de les files a la graella del DNI
 LLINDAR_MARCA = 0.06    # foscor per sobre del fons per considerar una casella marcada
 LLINDAR_CREU = 0.06     # foscor per sobre+sota de la casella que indica una creu
+# Conversió de les imatges en blanc i negre (1 bit, p. ex. TIFF) amb el traç
+# engruixit. Primer es fa amb OpenCV (ràpid; coincideix en un 97 % dels píxels
+# amb la d'ImageMagick). Si la lectura és dubtosa, es repeteix amb ImageMagick
+# ("convert -adaptive-blur 10 -monochrome", exacta però uns 7 s per full).
+SIGMA_BN = 0.00016      # OpenCV: suavitzat, en fracció de l'amplada (0,8 px a 600 ppp)
+LLINDAR_BN = 240        # OpenCV: nivell de gris per sota del qual el píxel és negre
+OPCIONS_IMAGEMAGICK = ["-adaptive-blur", "10", "-monochrome"]
+# Lectura dubtosa: alguna casella amb una foscor propera al llindar de marca
+# (marques molt fluixes o esborrades). Amb els exàmens de prova, totes les
+# diferències entre les dues conversions tenen caselles en aquesta zona.
+ZONA_DUBTE = (0.03, 0.15)
 ELIMINADA = "X"         # al fitxer de respostes, marca una pregunta eliminada
 
 
@@ -101,15 +119,63 @@ def cercles_cantonades(comps, W, H):
     return cantonades
 
 
-def carregar(ruta):
-    """Retorna (binaria, foscor): imatge en blanc i negre i nivell de gris 0..1.
+def llegir_imatge(ruta):
+    """Llegeix la imatge (JPEG, TIFF, ...) en gris. Retorna (gris, avisos)."""
+    avisos = []
+    gris = cv2.imread(ruta, cv2.IMREAD_GRAYSCALE)
+    if gris is None:
+        raise ValueError("no es pot llegir la imatge")
+    if ruta.lower().endswith((".tif", ".tiff")):
+        try:
+            pagines = cv2.imcount(ruta)
+        except cv2.error:
+            pagines = 1
+        if pagines > 1:
+            avisos.append(f"el TIFF té {pagines} pàgines; només es corregeix la primera")
+    return gris, avisos
+
+
+def imagemagick():
+    """Ordre d'ImageMagick ("magick" a la versió 7, "convert" a la 6) o None."""
+    return shutil.which("magick") or shutil.which("convert")
+
+
+def es_blanc_i_negre(gris):
+    return len(np.unique(gris[::4, ::4])) <= 2
+
+
+def engruixir_opencv(gris):
+    """Converteix una imatge en blanc i negre (1 bit) a "monochrome" amb el
+    traç engruixit: se suavitza lleugerament i tot el que no és blanc pur
+    passa a negre. Així la trama de punts amb què l'escàner representa el
+    gris del llapis es reforça i les vores primes de les caselles no queden
+    trencades. Aproxima la conversió d'ImageMagick."""
+    suau = cv2.GaussianBlur(gris, (0, 0), SIGMA_BN * gris.shape[1])
+    return np.where(suau < LLINDAR_BN, 0, 255).astype(np.uint8)
+
+
+def engruixir_imagemagick(ruta, gris):
+    """La mateixa conversió amb ImageMagick: "convert -adaptive-blur 10
+    -monochrome". És exacta però lenta."""
+    try:
+        sortida = subprocess.run([imagemagick(), ruta + "[0]", *OPCIONS_IMAGEMAGICK, "png:-"],
+                                 capture_output=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError) as e:
+        raise ValueError(f"ImageMagick no pot convertir la imatge ({e})") from None
+    convertida = cv2.imdecode(np.frombuffer(sortida, np.uint8), cv2.IMREAD_GRAYSCALE)
+    if convertida is None or convertida.shape != gris.shape:
+        raise ValueError("ImageMagick no ha retornat una imatge vàlida")
+    return convertida
+
+
+def carregar(gris):
+    """A partir de la imatge en gris, retorna (binaria, foscor, avisos): imatge
+    binaritzada, nivell de gris 0..1 i avisos.
 
     El full es redreça amb una transformació de perspectiva que porta els
     4 cercles de les cantonades a un rectangle perfecte (corregeix el gir, la
     inclinació i la deformació en trapezi)."""
-    gris = cv2.imread(ruta, cv2.IMREAD_GRAYSCALE)
-    if gris is None:
-        raise ValueError("no es pot llegir la imatge")
+    avisos = []
     if gris.shape[1] > AMPLADA_TREBALL * 1.2:
         f = AMPLADA_TREBALL / gris.shape[1]
         gris = cv2.resize(gris, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
@@ -118,8 +184,8 @@ def carregar(ruta):
 
     cantonades = cercles_cantonades(components(binaria)[0], W, H)
     if cantonades is None:
-        print(f"AVÍS {ruta}: no es troben els 4 cercles de les cantonades; "
-              "no es corregeix la perspectiva", file=sys.stderr)
+        avisos.append("no es troben els 4 cercles de les cantonades; "
+                      "no es corregeix la perspectiva")
     else:
         (se, sd, ie, id_) = cantonades
         esq, dre = (se[0] + ie[0]) / 2, (sd[0] + id_[0]) / 2
@@ -132,7 +198,7 @@ def carregar(ruta):
         _, binaria = cv2.threshold(gris, llindar, 255, cv2.THRESH_BINARY_INV)
 
     foscor = (255 - gris).astype(np.float32) / 255
-    return binaria, foscor
+    return binaria, foscor, avisos
 
 
 def es_rectangle(etiquetes, c):
@@ -451,7 +517,7 @@ def sobre_fons(m):
     return m - fons
 
 
-def treure_anullades(foscor, marques, posicions, mida):
+def treure_anullades(foscor, marques, posicions, mida, llindar_creu=LLINDAR_CREU):
     """Si hi ha diverses marques i alguna està anul·lada amb una creu, la
     descarta. Retorna (marques, anul·lades)."""
     if len(marques) < 2:
@@ -459,7 +525,7 @@ def treure_anullades(foscor, marques, posicions, mida):
     s = {i: sobresurt(foscor, posicions[i], mida) for i in marques}
     minim = min(s.values())
     # anul·lada: la creu sobresurt clarament i molt més que la marca més neta
-    anullades = [i for i in marques if s[i] >= LLINDAR_CREU and s[i] >= 3 * minim]
+    anullades = [i for i in marques if s[i] >= llindar_creu and s[i] >= 3 * minim]
     resta = [i for i in marques if i not in anullades]
     if anullades and len(resta) == 1:
         return resta, anullades
@@ -468,13 +534,70 @@ def treure_anullades(foscor, marques, posicions, mida):
 
 # -------------------------------------------------------------- correcció ----
 
-def llegir_full(ruta, llindar=LLINDAR_MARCA):
-    """Retorna (dni, codi, respostes, avisos, geometria). Cada resposta és una
-    cadena amb les lletres marcades ("" = en blanc, "AB" = diverses marques).
-    geometria = (foscor, posicions de les caselles, mida) per dibuixar."""
-    binaria, foscor = carregar(ruta)
-    dni_pos, codi_pos, mida_dni, preg_pos, mida_preg, avisos = \
+def llegir_full(ruta, llindar=LLINDAR_MARCA, avisos=None):
+    """Retorna (dni, codi, respostes, avisos, geometria, conversio). Cada
+    resposta és una cadena amb les lletres marcades ("" = en blanc, "AB" =
+    diverses marques). geometria = (foscor, posicions de les caselles, mida)
+    per dibuixar. conversio diu com s'ha convertit una imatge en blanc i
+    negre (None si és en gris). Els avisos s'afegeixen a la llista avisos, si
+    es dona; així no es perden si la lectura falla a mig camí.
+
+    Les imatges en blanc i negre es converteixen primer amb OpenCV. Si la
+    lectura és dubtosa (no es pot llegir, DNI o CODI incomplet, o caselles
+    amb una foscor propera al llindar), es repeteix amb ImageMagick."""
+    if avisos is None:
+        avisos = []
+    gris, avisos_imatge = llegir_imatge(ruta)
+    avisos += avisos_imatge
+    if not es_blanc_i_negre(gris):
+        return resultat(llegir_gris(gris, llindar, avisos), avisos, None)
+
+    try:
+        avisos_opencv = []
+        res = llegir_gris(engruixir_opencv(gris), llindar, avisos_opencv)
+        motiu = dubte(*res[:2], res[5])
+    except ValueError as e:
+        res, motiu = None, f"error amb OpenCV: {e}"
+    if motiu is None:
+        avisos += avisos_opencv
+        return resultat(res, avisos, "OpenCV")
+    if not imagemagick():
+        if res is None:
+            raise ValueError(f"{motiu}; instal·leu ImageMagick per provar-ho amb "
+                             "una conversió més precisa")
+        avisos += avisos_opencv
+        avisos.append(f"lectura dubtosa ({motiu}), però ImageMagick no està "
+                      "instal·lat; convé revisar la imatge corregida")
+        return resultat(res, avisos, "OpenCV")
+    res = llegir_gris(engruixir_imagemagick(ruta, gris), llindar, avisos)
+    return resultat(res, avisos, f"ImageMagick, {motiu}")
+
+
+def resultat(res, avisos, conversio):
+    """(dni, codi, respostes, avisos, geometria, conversio) per a llegir_full."""
+    dni, codi, respostes, _, geometria, _ = res
+    return dni, codi, respostes, avisos, geometria, conversio
+
+
+def dubte(dni, codi, valors):
+    """Motiu pel qual la lectura amb la conversió d'OpenCV és dubtosa, o None."""
+    if "?" in dni + codi:
+        return "DNI o CODI no llegit"
+    if np.any((valors >= ZONA_DUBTE[0]) & (valors <= ZONA_DUBTE[1])):
+        return "marques fluixes o esborrades"
+    return None
+
+
+def llegir_gris(gris, llindar, avisos):
+    """Llegeix el full a partir de la imatge en gris. Retorna (dni, codi,
+    respostes, avisos, geometria, valors), on valors són les foscors de totes
+    les caselles respecte del fons."""
+    binaria, foscor, avisos_imatge = carregar(gris)
+    avisos += avisos_imatge
+    dni_pos, codi_pos, mida_dni, preg_pos, mida_preg, avisos_graella = \
         construir_graelles(binaria, foscor)
+    avisos += avisos_graella
+    llindar_creu = LLINDAR_CREU * llindar / LLINDAR_MARCA
 
     # DNI i CODI: una fila de la matriu per columna del full, 10 dígits
     columnes = dni_pos + ([codi_pos] if codi_pos else [])
@@ -482,7 +605,7 @@ def llegir_full(ruta, llindar=LLINDAR_MARCA):
     digits = []
     for k, (fila, pos) in enumerate(zip(d, columnes)):
         m, anullades = treure_anullades(foscor, list(np.flatnonzero(fila >= llindar)),
-                                        pos, mida_dni)
+                                        pos, mida_dni, llindar_creu)
         if anullades:
             nom = f"DNI columna {k + 1}" if k < 8 else "CODI"
             avisos.append(f"{nom}: {','.join(DIGITS_DNI[i] for i in anullades)} anul·lat, "
@@ -495,13 +618,14 @@ def llegir_full(ruta, llindar=LLINDAR_MARCA):
     respostes = []
     for n, (fila, pos) in enumerate(zip(q, preg_pos), 1):
         m, anullades = treure_anullades(foscor, list(np.flatnonzero(fila >= llindar)),
-                                        pos, mida_preg)
+                                        pos, mida_preg, llindar_creu)
         if anullades:
             avisos.append(f"pregunta {n}: {''.join(LLETRES[i] for i in anullades)} "
                           f"anul·lada, es pren {LLETRES[m[0]]}")
         respostes.append("".join(LLETRES[i] for i in m))
     geometria = (foscor, preg_pos, mida_preg)
-    return dni, codi, respostes, avisos, geometria
+    valors = np.concatenate([np.ravel(d), np.ravel(q)])
+    return dni, codi, respostes, avisos, geometria, valors
 
 
 def llegir_solucions(ruta):
@@ -553,6 +677,7 @@ def corregir(respostes, solucio):
 
 
 SUFIX_CORREGIDA = "-cor.jpg"
+EXTENSIONS = (".jpg", ".jpeg", ".tif", ".tiff")   # imatges que es corregeixen
 VERD, VERMELL, BLAU = (0, 170, 0), (0, 0, 230), (220, 90, 0)   # colors BGR d'OpenCV
 
 
@@ -604,18 +729,29 @@ def llista_imatges(entrades):
     res = []
     for e in entrades:
         if os.path.isdir(e):
-            for ext in ("*.jpg", "*.jpeg", "*.JPG", "*.JPEG"):
-                res += glob.glob(os.path.join(e, ext))
+            res += [os.path.join(e, f) for f in os.listdir(e)
+                    if f.lower().endswith(EXTENSIONS)]
         else:
             res.append(e)
     # no es tornen a corregir les imatges generades per aquest programa
     return sorted(r for r in set(res) if not r.lower().endswith(SUFIX_CORREGIDA))
 
 
+def durada(segons):
+    """Durada en format llegible: 45s, 3m05s, 1h02m."""
+    segons = int(round(segons))
+    h, m, s = segons // 3600, segons % 3600 // 60, segons % 60
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
 def main():
     ap = argparse.ArgumentParser(description="Corregeix fulls de respostes escanejats.")
     ap.add_argument("entrades", nargs="*", default=["test"],
-                    help="fitxers jpg o directoris (per defecte: test)")
+                    help="imatges (jpg o tiff) o directoris (per defecte: test)")
     ap.add_argument("-r", "--respostes", default="respostes.csv",
                     help="fitxer amb les respostes correctes de cada permutació "
                          "(per defecte: respostes.csv)")
@@ -640,29 +776,42 @@ def main():
         w = csv.writer(f, delimiter=";")
         w.writerow(["DNI", "permutacio", "correctes", "erronies", "sense_resposta",
                     "avaluades", "eliminades", "fitxer"])
-        for ruta in imatges:
+        inici = time.monotonic()
+        for n, ruta in enumerate(imatges, 1):
+            avisos = []
             try:
-                dni, codi, resp, avisos, geometria = llegir_full(ruta, args.llindar)
+                dni, codi, resp, avisos, geometria, conversio = \
+                    llegir_full(ruta, args.llindar, avisos)
+                error = None
             except Exception as e:
-                print(f"ERROR {ruta}: {e}", file=sys.stderr)
+                error = e
+            # progrés: n/total (temps estimat fins al final, segons la mitjana
+            # del temps per examen fins ara)
+            restant = (time.monotonic() - inici) / n * (len(imatges) - n)
+            progres = f"{n}/{len(imatges)} ({durada(restant)})"
+            for a in avisos:
+                print(f"{progres} AVÍS {ruta}: {a}", file=sys.stderr)
+            if error is not None:
+                print(f"{progres} ERROR {ruta}: {error}", file=sys.stderr)
                 continue
+            # imatges en blanc i negre: com s'han convertit
+            metode = f"  [conversió {conversio}]" if conversio else ""
             if codi not in solucions:
-                print(f"ERROR {ruta}: DNI {dni}, permutació (CODI) '{codi}' no llegida "
-                      f"o no és a {args.respostes}; examen no corregit", file=sys.stderr)
+                print(f"{progres} ERROR {ruta}: DNI {dni}, permutació (CODI) '{codi}' no llegida "
+                      f"o no és a {args.respostes}; examen no corregit{metode}",
+                      file=sys.stderr)
                 continue
             solucio = solucions[codi]
             if len(resp) != len(solucio):
-                print(f"ERROR {ruta}: DNI {dni}, {len(resp)} preguntes al full però "
+                print(f"{progres} ERROR {ruta}: DNI {dni}, {len(resp)} preguntes al full però "
                       f"{len(solucio)} a la permutació {codi} de {args.respostes}; "
-                      "examen no corregit", file=sys.stderr)
+                      f"examen no corregit{metode}", file=sys.stderr)
                 continue
-            for a in avisos:
-                print(f"AVÍS {ruta}: {a}", file=sys.stderr)
             if "?" in dni:
-                print(f"AVÍS {ruta}: DNI no llegit correctament ({dni})", file=sys.stderr)
+                print(f"{progres} AVÍS {ruta}: DNI no llegit correctament ({dni})", file=sys.stderr)
             for i, r in enumerate(resp, 1):
                 if len(r) > 1 and not (i <= len(solucio) and solucio[i - 1] == ELIMINADA):
-                    print(f"AVÍS {ruta}: pregunta {i} amb diverses marques ({r}), "
+                    print(f"{progres} AVÍS {ruta}: pregunta {i} amb diverses marques ({r}), "
                           "compta com a errònia", file=sys.stderr)
             c, e, b, elim = corregir(resp, solucio)
             avaluades = len(solucio) - elim
@@ -670,12 +819,13 @@ def main():
             try:
                 desar_corregida(ruta, geometria, resp, solucio)
             except OSError as err:
-                print(f"AVÍS {ruta}: {err}", file=sys.stderr)
-            print(f"{os.path.basename(ruta)}: DNI {dni}  CODI {codi}  correctes {c}  "
+                print(f"{progres} AVÍS {ruta}: {err}", file=sys.stderr)
+            print(f"{progres} {os.path.basename(ruta)}: DNI {dni}  CODI {codi}  correctes {c}  "
                   f"errònies {e}  sense resposta {b}  avaluades {avaluades}  "
-                  f"eliminades {elim}")
+                  f"eliminades {elim}{metode}", flush=True)
             if args.detall:
-                print("   " + " ".join(f"{i}:{r or '-'}" for i, r in enumerate(resp, 1)))
+                print("   " + " ".join(f"{i}:{r or '-'}" for i, r in enumerate(resp, 1)),
+                      flush=True)
 
 
 if __name__ == "__main__":

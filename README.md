@@ -6,7 +6,7 @@ paper i corregir-los automàticament a partir dels fulls escanejats:
 | Programa | Què fa |
 |---|---|
 | `plantilla-examens-escanejats.py` | Genera el PDF amb els fulls de respostes, una pàgina per permutació. |
-| `corregir-examens-escanejats.py` | Llegeix els fulls escanejats (JPEG), detecta el DNI, la permutació i les respostes marcades, i genera el fitxer de notes `correccio.csv` i una imatge corregida de cada examen. |
+| `corregir-examens-escanejats.py` | Llegeix els fulls escanejats (JPEG o TIFF), detecta el DNI, la permutació i les respostes marcades, i genera el fitxer de notes `correccio.csv` i una imatge corregida de cada examen. |
 
 Cada pregunta té 4 respostes (A, B, C, D) i només una és correcta.
 
@@ -28,12 +28,16 @@ pip install opencv-python-headless numpy reportlab
 
 Per comprovar-ho: `python3 -c "import cv2; print(cv2.__version__)"`.
 
+Per corregir TIFF en blanc i negre cal també **ImageMagick** (vegeu
+*Escaneig en blanc i negre*): `sudo apt install imagemagick`. Sense
+ImageMagick es corregeixen igualment, però els fulls amb marques molt fluixes o esborrades poden sortir malament.
+
 ## Flux de treball
 
 1. Genera els fulls de respostes amb `plantilla-examens-escanejats.py`.
 2. Imprimeix-los a **mida real (100 %)**, no amb "ajusta a la pàgina".
 3. Els estudiants omplen el DNI i les respostes.
-4. Escaneja els fulls en JPEG (en gris, a 300 o 600 ppp) i desa'ls en un directori.
+4. Escaneja els fulls en JPEG o TIFF (preferiblement en gris, a 300 o 600 ppp) i desa'ls en un directori. Vegeu *Escaneig en blanc i negre*.
 5. Prepara el fitxer amb les respostes correctes de cada permutació.
 6. Executa `corregir-examens-escanejats.py`.
 7. Revisa els avisos que mostra el programa i les imatges `-cor.jpg`.
@@ -100,7 +104,7 @@ corresponent de cada línia.
 python3 corregir-examens-escanejats.py [IMATGES_O_DIRECTORIS ...] [opcions]
 ```
 
-Sense arguments, corregeix tots els `.jpg` del directori `test` amb
+Sense arguments, corregeix totes les imatges (`.jpg`, `.jpeg`, `.tif`, `.tiff`) del directori `test` amb
 `respostes.csv`. Exemples:
 
 ```bash
@@ -139,7 +143,7 @@ DNI;permutacio;correctes;erronies;sense_resposta;avaluades;eliminades;fitxer
 
 Per exemple, la nota sobre 10 sense penalització és `10 * correctes / avaluades`.
 
-**Imatge corregida.** Per a cada examen `X.jpg` es crea `X-cor.jpg` al mateix
+**Imatge corregida.** Per a cada examen `X.jpg` (o `X.tiff`) es crea `X-cor.jpg` al mateix
 directori: un cercle **verd** a cada resposta correcta i una creu **vermella**
 a cada resposta errònia. Les preguntes eliminades es tatxen amb una ratlla
 **blava**. Les preguntes en blanc no es marquen. Si es torna a
@@ -159,6 +163,10 @@ errònies, es pot calcular després a partir de les columnes.
 ### Avisos i errors
 
 El programa mostra per pantalla els casos que convé revisar a mà.
+Cada missatge d'un examen comença amb el progrés de la correcció, per
+exemple `12/86 (8m40s)`: és el 12è de 86 fitxers i falten uns 8 minuts i 40
+segons per acabar. El temps s'estima a partir del temps mitjà per examen fins
+aquell moment.
 
 Els missatges que comencen per `AVÍS` indiquen casos que convé revisar, però
 l'examen es corregeix. Els que comencen per `ERROR` indiquen que l'examen
@@ -172,11 +180,13 @@ l'examen es corregeix. Els que comencen per `ERROR` indiquen que l'examen
 | `permutació (CODI) '…' no llegida o no és a respostes.csv` | No es pot saber quina permutació és. L'examen **no es corregeix**. |
 | `ERROR …: 30 preguntes al full però 29 a la permutació 1 de respostes.csv; examen no corregit` | El nombre de preguntes del full no coincideix amb el nombre de respostes d'aquella permutació a `respostes.csv`. Normalment és que a la línia hi falta o hi sobra una lletra. L'examen **no es corregeix** fins que s'arregli el fitxer. |
 | `caselles localitzades a partir de les lletres i els dígits impresos (vores massa clares)` | Les vores de les caselles no es veuen prou i s'han localitzat a partir de les lletres i els dígits de dins. Normalment la correcció és bona, però convé revisar la imatge `-cor.jpg`. |
+| `lectura dubtosa (marques fluixes o esborrades), però ImageMagick no està instal·lat` | Imatge en blanc i negre on la conversió ràpida (OpenCV) no és fiable i no s'ha pogut repetir amb ImageMagick. Convé revisar la imatge `-cor.jpg` o instal·lar ImageMagick. |
+| `el TIFF té 3 pàgines; només es corregeix la primera` | El programa espera un examen per fitxer. Cal escanejar cada full en un fitxer separat. |
 | `no es troben els 4 cercles de les cantonades` | El full s'ha escanejat retallat o tapat. Es corregeix sense redreçar-lo. |
 
 ## Com funciona el corrector
 
-1. **Càrrega.** La imatge es redueix a uns 300 ppp, es binaritza (llindar d'Otsu) i es corregeix la perspectiva amb els 4 cercles de les cantonades. Això corregeix el gir, la inclinació i la deformació en trapezi, com la d'una foto feta amb el mòbil.
+1. **Càrrega.** Si la imatge és en blanc i negre (1 bit), primer es converteix a *monochrome* amb el traç engruixit, amb OpenCV o, si la lectura és dubtosa, amb ImageMagick (vegeu *Escaneig en blanc i negre*). La imatge es redueix a uns 300 ppp, es binaritza (llindar d'Otsu) i es corregeix la perspectiva amb els 4 cercles de les cantonades. Això corregeix el gir, la inclinació i la deformació en trapezi, com la d'una foto feta amb el mòbil.
 2. **Caselles.** Es localitzen les caselles buides: components amb forma de rectangle i interior blanc. A partir d'aquestes es dedueixen les files i les columnes de les graelles, de manera que també se sap on són les caselles que l'estudiant ha omplert. Les caselles del DNI, més allargades, se separen de les de les preguntes per la forma.
 
    Si les vores de les caselles són massa clares per trobar-les, les caselles es localitzen a partir de les lletres i els dígits impresos a dins (A, B, C, D i 1…0). Es descarten els números de pregunta, les etiquetes de les files i el text, que no tenen una casella al voltant o són de mida diferent. La graella del DNI són les 10 primeres files de dígits, i la mida de les caselles es mesura fent la mitjana de les finestres al voltant de totes les lletres, on la vora fluixa es reforça.
@@ -190,6 +200,42 @@ sobre del fons i la marca més fluixa està a 0,084, de manera que el valor per
 defecte (0,06) deixa marge per les dues bandes. Si amb altres escàners o
 bolígrafs es perden marques fluixes, es pot baixar (per exemple `-u 0.05`). Si
 apareixen marques que no hi són, es pot pujar (per exemple `-u 0.08`).
+
+### Escaneig en blanc i negre
+
+Molts escàners desen els TIFF en blanc i negre (1 bit). El gris del llapis
+s'hi representa amb una trama de punts negres poc densa, i les vores primes de
+les caselles surten puntejades. El programa ho detecta automàticament i, abans
+de corregir-la, converteix la imatge a *monochrome* amb el **traç engruixit**:
+la trama del llapis es reforça i les vores de les caselles es tanquen. Després
+la imatge es corregeix igual que un JPEG, amb el llindar normal (0,06). La
+imatge `-cor.jpg` mostra la versió convertida.
+
+La conversió es fa en dos passos:
+
+1. **OpenCV** (ràpid, menys d'un segon per full): suavitza lleugerament la
+   imatge (0,8 píxels a 600 ppp) i passa a negre tot el que no és blanc pur.
+   Coincideix en un 97 % dels píxels amb la conversió d'ImageMagick.
+2. **ImageMagick** (exacte, però uns 7 segons per full a 600 ppp), només si la
+   lectura amb OpenCV és dubtosa: no es pot llegir el full, el DNI o el CODI
+   tenen algun dígit sense llegir, o alguna casella té una foscor entre 0,03
+   i 0,15, a prop del llindar (marques molt fluixes o esborrades). Llavors la
+   imatge es torna a convertir amb
+
+   ```bash
+   convert FITXER.tiff -adaptive-blur 10 -monochrome RESULTAT
+   ```
+
+La línia de resultat de cada examen diu quina conversió s'ha fet servir, i
+per què s'ha recorregut a ImageMagick:
+
+```
+1/86 (9m50s) A6E01-..._0001.tiff: DNI 12856003  CODI 5  correctes 14 ...  [conversió ImageMagick, DNI o CODI no llegit]
+2/86 (3m12s) A6E01-..._0002.tiff: DNI 48047507  CODI 6  correctes 12 ...  [conversió OpenCV]
+```
+
+Si ImageMagick no està instal·lat, tots els fulls es corregeixen amb OpenCV, i
+els dubtosos surten amb un avís per revisar-los.
 
 ## Recomanacions
 
